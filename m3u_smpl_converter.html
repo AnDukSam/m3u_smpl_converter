@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3U ⇌ SMPL 플레이리스트 변환기</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .conversion-area {
+            display: flex;
+            gap: 20px;
+        }
+        .input-group, .output-group {
+            flex: 1;
+        }
+        textarea {
+            width: 100%;
+            height: 400px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-family: Consolas, monospace;
+            font-size: 14px;
+            background-color: #f9f9f9;
+            /* smplOutput에서 readonly가 제거되어 이제 입력 가능합니다. */
+        }
+        .controls {
+            margin: 20px 0;
+            text-align: center;
+        }
+        button {
+            padding: 12px 25px;
+            margin: 0 10px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+        #convertM3U {
+            background-color: #007bff;
+            color: white;
+        }
+        #convertSMPL {
+            background-color: #28a745;
+            color: white;
+        }
+        /* 내용 비우기 버튼 스타일 추가 */
+        #clearContent {
+            background-color: hotpink; /* 핑크색 */
+            color: white;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        .info-box {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ffc107;
+            background-color: #fff3cd;
+            color: #856404;
+            border-radius: 4px;
+            /* 요청된 수정 사항: 하단 바깥 여백 추가 */
+            margin-bottom: 20px; 
+        }
+        /* 상태 메시지 스타일 */
+        #statusMessage {
+            margin-top: 15px;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #007bff;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🎶 M3U ⇌ SMPL 플레이리스트 변환기</h1>
+    <div class="info-box">
+        ⚠️ 주의 사항<br>
+        - M3U → SMPL 변환 시: SMPL 파일 경로 앞에 '/storage/emulated/0/Music/'를 추가하고, '\'를 '/'로 변경합니다.<br>
+        - SMPL → M3U 변환 시: SMPL 경로에서 '/storage/emulated/0/Music/'를 제거하고, '/'를 '\'로 변경하며, 재생 시간은 '0'으로 설정됩니다.
+    </div>
+    
+    <div class="conversion-area">
+        <div class="input-group">
+            <label for="m3uInput">M3U 입력 영역</label>
+            <textarea id="m3uInput" placeholder="여기에 M3U 파일 내용을 붙여넣으세요 (예: #EXTINF:..., 파일 경로...)"></textarea>
+        </div>
+        <div class="output-group">
+            <label for="smplOutput">SMPL (JSON) 출력 영역</label>
+            <textarea id="smplOutput" placeholder="변환된 SMPL JSON 텍스트가 여기에 표시됩니다."></textarea>
+        </div>
+    </div>
+
+    <div class="controls">
+        <button id="convertM3U">M3U → SMPL 변환</button>
+        <button id="convertSMPL">SMPL → M3U 변환(역변환)</button>
+        <button id="clearContent">내용 비우기</button>
+        <div id="statusMessage"></div> 
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const m3uInput = document.getElementById('m3uInput');
+    const smplOutput = document.getElementById('smplOutput');
+    const convertM3UButton = document.getElementById('convertM3U');
+    const convertSMPLButton = document.getElementById('convertSMPL');
+    const clearContentButton = document.getElementById('clearContent'); // 새로운 버튼 DOM 요소
+    const statusMessage = document.getElementById('statusMessage');
+
+    /**
+     * 상태 메시지를 표시합니다.
+     * @param {string} message - 표시할 메시지
+     * @param {string} color - 메시지 색상 (선택 사항)
+     */
+    function showStatus(message, color = '#007bff') {
+        statusMessage.textContent = message;
+        statusMessage.style.color = color;
+        // 5초 후에 메시지 초기화
+        setTimeout(() => {
+            statusMessage.textContent = '';
+        }, 5000);
+    }
+
+    // ------------------------------------------------------------------
+    // 1. M3U to SMPL Conversion Logic
+    // ------------------------------------------------------------------
+    function convertM3UtoSMPL() {
+        const m3uText = m3uInput.value;
+        if (!m3uText.trim()) {
+            showStatus('M3U 입력이 비어 있습니다.', 'red');
+            return;
+        }
+
+        const playlistName = "Converted Playlist"; 
+        const lines = m3uText.split(/\r?\n/).filter(line => line.trim() !== '' && line.toUpperCase() !== '#EXTM3U');
+        
+        const members = [];
+        let order = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+
+            if (line.startsWith('#EXTINF')) {
+                const titleArtistMatch = line.match(/#EXTINF:\d+,(.*) - (.*)/);
+                let title = '';
+                let artist = '';
+                
+                if (titleArtistMatch) {
+                    title = titleArtistMatch[1].trim();
+                    artist = titleArtistMatch[2].trim();
+                } else {
+                    const titleOnlyMatch = line.match(/#EXTINF:\d+,(.*)/);
+                    if (titleOnlyMatch) {
+                        title = titleOnlyMatch[1].trim();
+                        const lastHyphenIndex = title.lastIndexOf(' - ');
+                        if (lastHyphenIndex !== -1) {
+                            artist = title.substring(lastHyphenIndex + 3).trim();
+                            title = title.substring(0, lastHyphenIndex).trim();
+                        } else {
+                            artist = "Unknown Artist";
+                        }
+                    }
+                }
+
+                if (title && i + 1 < lines.length) {
+                    const relativePath = lines[i + 1].trim();
+                    i++; 
+
+                    const pathPrefix = '/storage/emulated/0/Music/';
+                    const smplPath = pathPrefix + relativePath.replace(/\\/g, '/');
+
+                    members.push({
+                        artist: artist,
+                        info: smplPath,
+                        order: order++,
+                        title: title,
+                        type: 65537
+                    });
+                }
+            }
+        }
+
+        const smplObject = {
+            members: members,
+            name: playlistName,
+            recentlyPlayedDate: 0,
+            sortBy: 4,
+            version: 1
+        };
+
+        smplOutput.value = JSON.stringify(smplObject, null, 4);
+        showStatus('M3U → SMPL 변환이 성공하였습니다.', 'green'); 
+    }
+
+    // ------------------------------------------------------------------
+    // 2. SMPL to M3U Conversion Logic (Inverse)
+    // ------------------------------------------------------------------
+    function convertSMPLtoM3U() {
+        // smplOutput에서 바로 텍스트를 가져오거나 m3uInput에서 가져옵니다.
+        let smplText = smplOutput.value || m3uInput.value; 
+        let smplObject;
+        
+        if (!smplText.trim()) {
+            showStatus('SMPL 입력이 비어 있습니다. SMPL 텍스트를 입력하거나 먼저 M3U를 변환하세요.', 'red');
+            return;
+        }
+
+        try {
+            smplObject = JSON.parse(smplText);
+        } catch (e) {
+            showStatus('유효하지 않은 SMPL JSON 형식입니다.', 'red');
+            return;
+        }
+
+        if (!smplObject.members || !Array.isArray(smplObject.members)) {
+            showStatus('SMPL JSON에 "members" 배열이 없습니다.', 'red');
+            return;
+        }
+
+        smplObject.members.sort((a, b) => (a.order > b.order) ? 1 : -1);
+
+        let m3uOutputText = '#EXTM3U\n';
+        const pathPrefix = '/storage/emulated/0/Music/';
+
+        smplObject.members.forEach(member => {
+            const title = member.title || 'Unknown Title';
+            const artist = member.artist || 'Unknown Artist';
+            m3uOutputText += `#EXTINF:0,${title} - ${artist}\n`;
+
+            let relativePath = member.info || '';
+            if (relativePath.startsWith(pathPrefix)) {
+                relativePath = relativePath.substring(pathPrefix.length);
+            }
+            relativePath = relativePath.replace(/\//g, '\\');
+            
+            m3uOutputText += `${relativePath}\n`;
+        });
+
+        m3uInput.value = m3uOutputText;
+        showStatus('SMPL → M3U 변환(역변환)이 성공하였습니다.', 'green'); 
+    }
+
+    // ------------------------------------------------------------------
+    // 3. Clear Content Logic
+    // ------------------------------------------------------------------
+    function clearContents() {
+        m3uInput.value = '';
+        smplOutput.value = '';
+        showStatus('입력/출력 내용이 모두 비워졌습니다.', 'hotpink');
+    }
+
+
+    // Event Listeners
+    convertM3UButton.addEventListener('click', convertM3UtoSMPL);
+    convertSMPLButton.addEventListener('click', convertSMPLtoM3U);
+    clearContentButton.addEventListener('click', clearContents); // '내용 비우기' 이벤트 리스너 추가
+});
+</script>
+</body>
+</html>
